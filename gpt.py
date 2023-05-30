@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-# hyperparameters
-batch_size = 64 # how many independent sequences will we process in parallel?
-block_size = 256 # what is the maximum context length for predictions?
+# ハイパーパラメータ
+batch_size = 64 # 独立したシーケンスを何本並列処理するか
+block_size = 256 # 推論するコンテキストの最大の長さ
 max_iters = 5000
 eval_interval = 500
 learning_rate = 3e-4
@@ -22,24 +22,24 @@ torch.manual_seed(1337)
 with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
-# here are all the unique characters that occur in this text
+# テキストに出現するユニークな文字のリスト
 chars = sorted(list(set(text)))
 vocab_size = len(chars)
-# create a mapping from characters to integers
+# 文字を整数値にマッピングする辞書
 stoi = { ch:i for i,ch in enumerate(chars) }
 itos = { i:ch for i,ch in enumerate(chars) }
-encode = lambda s: [stoi[c] for c in s] # encoder: take a string, output a list of integers
-decode = lambda l: ''.join([itos[i] for i in l]) # decoder: take a list of integers, output a string
+encode = lambda s: [stoi[c] for c in s] # encoder: 文字列を受け取り、整数のリストを出力する
+decode = lambda l: ''.join([itos[i] for i in l]) # decoder: 整数のリストを受け取り、文字列を出力する
 
-# Train and test splits
+# 学習と検証データを分割
 data = torch.tensor(encode(text), dtype=torch.long)
-n = int(0.9*len(data)) # first 90% will be train, rest val
+n = int(0.9*len(data)) # 最初の90%が学習で残りが検証
 train_data = data[:n]
 val_data = data[n:]
 
-# data loading
+# データをロードするメソッド
 def get_batch(split):
-    # generate a small batch of data of inputs x and targets y
+    # 入力x、ターゲットyのデータを一括で生成する
     data = train_data if split == 'train' else val_data
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack([data[i:i+block_size] for i in ix])
@@ -62,7 +62,7 @@ def estimate_loss():
     return out
 
 class Head(nn.Module):
-    """ one head of self-attention """
+    """ self-attentionの一つのヘッド """
 
     def __init__(self, head_size):
         super().__init__()
@@ -79,18 +79,20 @@ class Head(nn.Module):
         B,T,C = x.shape
         k = self.key(x)   # (B,T,hs)
         q = self.query(x) # (B,T,hs)
-        # compute attention scores ("affinities")
+        # Attentionのスコアを計算する ("affinities")
+        # AttentionWeightレイヤー
         wei = q @ k.transpose(-2,-1) * k.shape[-1]**-0.5 # (B, T, hs) @ (B, hs, T) -> (B, T, T)
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
         wei = F.softmax(wei, dim=-1) # (B, T, T)
         wei = self.dropout(wei)
-        # perform the weighted aggregation of the values
+        # 重みづけ和を計算する
+        # WeightSumレイヤー
         v = self.value(x) # (B,T,hs)
         out = wei @ v # (B, T, T) @ (B, T, hs) -> (B, T, hs)
         return out
 
 class MultiHeadAttention(nn.Module):
-    """ multiple heads of self-attention in parallel """
+    """ 並列処理するMulti-Head Attention """
 
     def __init__(self, num_heads, head_size):
         super().__init__()
@@ -104,7 +106,7 @@ class MultiHeadAttention(nn.Module):
         return out
 
 class FeedFoward(nn.Module):
-    """ a simple linear layer followed by a non-linearity """
+    """ 2層の全結合層 """
 
     def __init__(self, n_embd):
         super().__init__()
@@ -119,10 +121,10 @@ class FeedFoward(nn.Module):
         return self.net(x)
 
 class Block(nn.Module):
-    """ Transformer block: communication followed by computation """
+    """ Attention, 全結合層からなるTransformer層 """
 
     def __init__(self, n_embd, n_head):
-        # n_embd: embedding dimension, n_head: the number of heads we'd like
+        # n_embd: 畳み込みの次元, n_head: headの数
         super().__init__()
         head_size = n_embd // n_head
         self.sa = MultiHeadAttention(n_head, head_size)
@@ -136,6 +138,7 @@ class Block(nn.Module):
         return x
 
 class GPTLanguageModel(nn.Module):
+    """ GPTモデル """
 
     def __init__(self):
         super().__init__()
@@ -197,29 +200,29 @@ class GPTLanguageModel(nn.Module):
 
 model = GPTLanguageModel()
 m = model.to(device)
-# print the number of parameters in the model
+# モデル内のパラメータ数を表示する
 print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
 
-# create a PyTorch optimizer
+# PyTorchオプティマイザを作成する
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
 for iter in range(max_iters):
 
-    # every once in a while evaluate the loss on train and val sets
+    # 学習、検証データそれぞれで損失を計算する。
     if iter % eval_interval == 0 or iter == max_iters - 1:
         losses = estimate_loss()
         print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
 
-    # sample a batch of data
+    # データを一括でサンプリングする
     xb, yb = get_batch('train')
 
-    # evaluate the loss
+    # 損失を評価する
     logits, loss = model(xb, yb)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
 
-# generate from the model
+# モデルから生成する
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
 print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
 #open('more.txt', 'w').write(decode(m.generate(context, max_new_tokens=10000)[0].tolist()))
